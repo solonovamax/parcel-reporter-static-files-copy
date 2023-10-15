@@ -1,12 +1,13 @@
 "use strict";
-const { Reporter } = require("@parcel/plugin");
+const {Reporter} = require("@parcel/plugin");
 const fs = require("fs");
 const path = require("path");
+const {minimatch} = require("minimatch");
 
 const PACKAGE_JSON_SECTION = "staticFiles";
 
 const staticCopyPlugin = new Reporter({
-  async report({ event, options }) {
+  async report({event, options}) {
     if (event.type === "buildSuccess") {
       const projectRoot = findProjectRoot(event, options);
       const configs = getSettings(projectRoot);
@@ -21,8 +22,10 @@ const staticCopyPlugin = new Reporter({
         )
       );
 
-      for (var config of configs) {
+      for (const config of configs) {
+        /**@type {string} */
         let distPaths = config.distDir ? [config.distDir] : targets;
+        let includeGlob = config.includeGlob ? config.includeGlob : "**";
 
         if (config.env) {
           if (!doesEnvironmentVarsMatches(config.env)) {
@@ -33,38 +36,55 @@ const staticCopyPlugin = new Reporter({
         if (config.staticOutPath) {
           distPaths = distPaths.map((p) => path.join(p, config.staticOutPath));
         }
-  
+        /**@type {string}*/
         let staticPath = config.staticPath || path.join(projectRoot, "static");
-  
+
         let fn = fs.statSync(staticPath).isDirectory() ? copyDir : copyFile;
-        
+
         for (let distPath of distPaths) {
-            fn(staticPath, distPath);
+          fn(staticPath, distPath, includeGlob);
         }
       }
     }
   },
 });
 
-const copyFile = (copyFrom, copyTo) => {
-  if (!fs.existsSync(copyTo)) {
-    fs.mkdirSync(copyTo, { recursive: true });
+function copySingleFile(src, copyTo, includeGlob) {
+  if (shouldBeIncluded(src, includeGlob)) {
+    fs.copyFileSync(src, copyTo);
   }
-  fs.copyFileSync(copyFrom, path.join(copyTo, path.basename(copyFrom)));
+}
+
+const shouldBeIncluded = (file, includeGlob) => {
+  return minimatch(file, path.join(includeGlob));
 };
 
-const copyDir = (copyFrom, copyTo) => {
+const copyFile = (copyFrom, copyTo, includeGlob) => {
   if (!fs.existsSync(copyTo)) {
-    fs.mkdirSync(copyTo, { recursive: true });
+    fs.mkdirSync(copyTo, {recursive: true});
+  }
+
+  let dest = path.join(copyTo, path.basename(copyFrom));
+  copySingleFile(copyFrom, dest, includeGlob);
+};
+
+/**
+ * @param {string} copyFrom
+ * @param {string} copyTo
+ * @param {string} includeGlob
+ */
+const copyDir = (copyFrom, copyTo, includeGlob) => {
+  if (!fs.existsSync(copyTo)) {
+    fs.mkdirSync(copyTo, {recursive: true});
   }
   const copy = (filepath, relative, filename) => {
     const dest = path.join(copyTo, relative);
     if (!filename) {
       if (!fs.existsSync(dest)) {
-        fs.mkdirSync(dest, { recursive: true });
+        fs.mkdirSync(dest, {recursive: true});
       }
     } else {
-      fs.copyFileSync(filepath, dest);
+      copySingleFile(filepath, dest, includeGlob);
     }
   };
   recurseSync(copyFrom, copy);
@@ -107,8 +127,12 @@ const findProjectRoot = (event, options) => {
     return options.env["PNPM_SCRIPT_SRC_DIR"];
   }
   return options.projectRoot;
-}
-
+};
+/**
+ *
+ * @param projectRoot
+ * @returns {any[]}
+ */
 const getSettings = (projectRoot) => {
   let packageJson = JSON.parse(
     fs.readFileSync(path.join(projectRoot, "package.json"))
@@ -130,6 +154,6 @@ const doesEnvironmentVarsMatches = (envVars) => {
     }
   }
   return allMatches;
-}
+};
 
 exports.default = staticCopyPlugin;
